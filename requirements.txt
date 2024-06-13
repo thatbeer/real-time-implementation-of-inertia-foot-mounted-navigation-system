@@ -1,0 +1,10 @@
+numpy
+matplotlib
+xsensdeviceapi
+scipy
+pandas
+threading
+tkinter
+# xsensdeviceapi # module from movella
+yaml
+omegaconf
