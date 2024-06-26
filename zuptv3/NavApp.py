@@ -1,4 +1,8 @@
+# This version use INS without batch processing window, 
+# this could lead to slow performacne due to the amount of
+# data accmulated over time.
 import sys
+import os
 import threading
 import time
 import numpy as np
@@ -7,104 +11,27 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import tkinter as tk
 from tkinter import ttk
 import xsensdeviceapi as xda
-from mpl_toolkits.mplot3d import Axes3D
 
 from omegaconf import OmegaConf
 
-# from Init_det_glrt import Init_det_glrt
+from Init_det_glrt import Init_det_glrt
+# from INS import INS
+from RTINS import INS
 # from ZUPTaidedINS import ZUPTaidedINS
 # from detector import detector_adaptive
 # from xda_utils import *
-from INS import INS
+# from INS import INS
+from xda_class import XdaCallback, Scanner
 
-from threading import Lock
 
-class Payload:
-    def __init__(self):
-        self.timestamp = []
-        self.acc = np.array([0, 0, 0])
-        self.angular_velocity = np.array([0, 0, 0])
 
-class XdaCallback(xda.XsCallback):
-    def __init__(self, max_buffer_size=5):
-        super().__init__()
-        self.m_maxNumberOfPacketsInBuffer = max_buffer_size
-        self.m_packetBuffer = list()
-        self.m_lock = Lock()
-
-    def packetAvailable(self):
-        with self.m_lock:
-            return len(self.m_packetBuffer) > 0
-
-    def getNextPacket(self):
-        with self.m_lock:
-            assert len(self.m_packetBuffer) > 0
-            return xda.XsDataPacket(self.m_packetBuffer.pop(0))
-
-    def onLiveDataAvailable(self, dev, packet):
-        with self.m_lock:
-            assert packet is not None
-            if len(self.m_packetBuffer) >= self.m_maxNumberOfPacketsInBuffer:
-                self.m_packetBuffer.pop(0)
-            self.m_packetBuffer.append(xda.XsDataPacket(packet))
-
-class Scanner:
-    def __init__(self, retries=3, wait_time=1):
-        self.control = xda.XsControl_construct()
-        assert self.control != 0
-        self.device = None
-        self.retries = retries
-        self.wait_time = wait_time
-
-    def scan_and_open(self):
-        attempt = 0
-        while attempt < self.retries:
-            print("Scanning for devices... Attempt:", attempt + 1)
-            portInfoArray = xda.XsScanner_scanPorts()
-            
-            mtPort = xda.XsPortInfo()
-            for i in range(portInfoArray.size()):
-                if portInfoArray[i].deviceId().isMti() or portInfoArray[i].deviceId().isMtig():
-                    mtPort = portInfoArray[i]
-                    break
-            
-            if mtPort.empty():
-                print("No MTi device found. Retrying...")
-                attempt += 1
-                time.sleep(self.wait_time)
-                continue
-            
-            did = mtPort.deviceId()
-            print(f"Found a device with ID: {did.toXsString()}, Port: {mtPort.portName()}")
-
-            if not self.control.openPort(mtPort.portName(), mtPort.baudrate()):
-                raise RuntimeError("Could not open port. Aborting.")
-            
-            self.device = self.control.device(did)
-            assert self.device is not None
-            print(f"Device {self.device.productCode()} with ID {self.device.deviceId().toXsString()} opened.")
-            return self.device
-        
-        raise RuntimeError("No MTi device found after multiple attempts. Aborting.")
-
-    def get_device_info(self):
-        if self.device:
-            device_info = {
-                "Product Code": self.device.productCode(),
-                "Device ID": self.device.deviceId().toXsString(),
-                "Firmware Version": self.device.firmwareVersion().toXsString()
-            }
-            return device_info
-        return {}
-
-    def close(self):
-        if self.device:
-            self.device.stopRecording()
-            self.device.closeLogFile()
-        if self.control:
-            self.control.close()
-        print("Disconnected successfully.")
-
+def generate_unique_filename(base_name, extension=".csv"):
+    counter = 1
+    filename = f"{base_name}{extension}"
+    while os.path.exists(filename):
+        filename = f"{base_name}_{counter}{extension}"
+        counter += 1
+    return filename
 
 def load_config(file_path):
     return OmegaConf.load(file_path)
@@ -123,18 +50,28 @@ class NavigationApp(tk.Tk):
         self.sampling_rate = config.general_parameters.sample_rate
         self.scanner = Scanner()
         self.callback = XdaCallback()
+        self.simdata = Init_det_glrt()
+        self.ins = INS(self.simdata, adpt_flag=True)
         # self.simdata = Init_det_glrt()
-        self.INS = INS(self.config, adpt_flag=True)
-        self.adpt_flag = True
         self.running = False
         self.device = None
+        self.n = 0
 
-        self.time_window = 1.0
-        self.sampling_rate = 100
+        self.time_window = 1.0 # sec
+        self.sampling_rate = 1 / self.simdata['Ts']
         self.u_window = []
-        self.position = np.zeros((3, 1))
+        self.batch_position = np.zeros((3, 1))
         self.state_vector = np.zeros((9, 1))
+        self.cov = None
         self.state_position = []
+
+        self.init_P = None
+        self.init_quat = None
+        self.init_position = None
+
+        self.positions = []
+
+        self.imu_datas = []
 
         self.init_ui()
 
@@ -162,6 +99,10 @@ class NavigationApp(tk.Tk):
 
         self.stop_button = ttk.Button(self.ctrl_frame, text="Stop", command=self.stop_collection, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=10, pady=10)
+
+        # Add Reset Orientation button
+        self.reset_orientation_button = ttk.Button(self.ctrl_frame, text="Reset Orientation", command=self.reset_orientation, state=tk.DISABLED)
+        self.reset_orientation_button.pack(side=tk.LEFT, padx=10, pady=10)
 
         # Position figure
         self.fig_position, self.ax_position = plt.subplots()
@@ -207,6 +148,17 @@ class NavigationApp(tk.Tk):
 
         # Start the orientation update loop
         self.update_orientation()
+    
+    def reset_orientation(self):
+        if self.device:
+            print("Resetting device orientation...")
+            self.device.gotoConfig()
+            print("Reset the orientation") # XRM_Inclination / XRM_Global
+            self.device.resetOrientation(xda.XRM_Inclination)  ##how to extract the enum to request command?
+            print("go back to measurement mode...")
+            self.device.gotoMeasurement()
+        else:
+            print("No device connected.")
 
     def connect_sensor(self):
         self.device = self.scanner.scan_and_open()  # open port
@@ -221,6 +173,7 @@ class NavigationApp(tk.Tk):
         self.connect_button.config(state=tk.DISABLED)
         self.disconnect_button.config(state=tk.NORMAL)
         self.start_button.config(state=tk.NORMAL)
+        self.reset_orientation_button.config(state=tk.NORMAL)
 
     def disconnect_sensor(self):
         if self.device:
@@ -230,10 +183,11 @@ class NavigationApp(tk.Tk):
         self.disconnect_button.config(state=tk.DISABLED)
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.DISABLED)
+        self.reset_orientation_button.config(state=tk.DISABLED)
         self.reset_initial_position()
-
+        self.add_text(f"Disconnected successfully...")
         self.info_label.config(text="Sensor Information: Not Connected")
-
+        
     def start_collection(self):
         self.running = True
         self.start_button.config(state=tk.DISABLED)
@@ -246,16 +200,35 @@ class NavigationApp(tk.Tk):
 
     def stop_collection(self):
         self.running = False
+        self.save_data()
+        self.imu_datas.clear()
         if self.collection_thread.is_alive():
             self.collection_thread.join()
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
 
+    def save_data(self):
+        base_name = "imu_data.csv"
+        filename = generate_unique_filename(base_name)
+        with open(filename, 'w') as file:
+            # Assuming 'u' contains 6 elements: 3 from accelerometer and 3 from gyroscope
+            # file.write("AccX,AccY,AccZ,GyroX,GyroY,GyroZ\n")
+            for data in self.imu_datas:
+                file.write(','.join(map(str, data)) + '\n')
+        print(f"Data successfully saved to {filename}")
+        self.add_text(f"Data successfully saved to {filename}")
+
     def reset_initial_position(self):
-        self.position = np.zeros((3, 1))
+        self.batch_position = np.zeros((3, 1))
         self.state_vector = np.zeros((9, 1))
 
-    def collect_data(self):
+    def add_text(self, s):
+        self.data_label.config(text=s)
+        self.data_text.insert(tk.END, s + '\n')
+        self.data_text.see(tk.END)  # Scroll to the end of the text box
+        return self
+
+    def collect_data(self): 
         while self.running:
             window_size = int(self.time_window * self.sampling_rate)
             if self.callback.packetAvailable():
@@ -263,31 +236,43 @@ class NavigationApp(tk.Tk):
                 packet = self.callback.getNextPacket()
                 u = self.process_data(packet)
                 s += "Acc X: %.2f" % u[0] + ", Acc Y: %.2f" % u[1] + ", Acc Z: %.2f" % u[2]
+                s += "\nGyrp X: %.2f" % u[3] + ", Gyrp Y: %.2f" % u[4] + ", Gyrp Z: %.2f" % u[5]
                 self.data_label.config(text=s)
                 self.data_text.insert(tk.END, s + '\n')
                 self.data_text.see(tk.END)  # Scroll to the end of the text box
 
                 self.u_window.append(u)
-                if len(self.u_window) > window_size:
-                    us = np.array(self.u_window)
-                    # zupt, logL = detector_adaptive(us.T, self.simdata)
-                    # x_h, _ = ZUPTaidedINS(us.T, zupt, logL, self.adpt_flag, self.simdata)
-                    zupt , logL = self.INS.detector(us.T)
-                    x_h, _ = self.INS.baseline(us.T, zupt, logL)
+                self.imu_datas.append(u)
+                self.n += 1
+                if self.n >= window_size:
+                # if len(self.u_window) > window_size:
+                    self.n = 0 # set counter back to 0
+                    us = np.array(self.u_window) # batch processing
+                    # us = np.array(self.imu_datas) # stacked processing
+                    zupt, logL = self.ins.detector_adaptive(us.T)
+                    x_h, _, quat, P = self.ins.baseline(
+                        us.T, zupt, logL, True, 
+                        init_state=self.init_position,
+                        init_quat=self.init_quat,
+                        init_P=self.init_P)
+                    for j in range(len(x_h[0])):
+                            xj,yj,zj = x_h[:3,j]
+                            self.positions.append([xj, yj, zj])
                     x, y, z = x_h[0:3, -1]
-                    self.position[0] += x
-                    self.position[1] += y
-                    self.position[2] += z
-                    self.state_position.append(self.position.ravel().tolist())
-                    self.u_window.clear()
+                    self.batch_position[0] += x
+                    self.batch_position[1] += y
+                    self.batch_position[2] += z
+                    self.state_position.append(self.batch_position.ravel().tolist())
+                    self.init_position, self.init_quat, self.init_P = x_h[:,-1], quat, P
+                    self.u_window.clear() # does not need with non-batch
                     self.visualize_data()
                 print("%s\r" % s, end="", flush=True)
             else:
                 time.sleep(0.01)  # Wait briefly if no packet is available
 
     def process_data(self, data_packet):
-        acc = data_packet.calibratedAcceleration()
-        gyro = data_packet.calibratedGyroscopeData()
+        acc = data_packet.calibratedAcceleration() # 21/6/24 clarification from eng : m/s^2
+        gyro = data_packet.calibratedGyroscopeData() # clarification from eng : rad/sec
         return np.array([acc[0], acc[1], acc[2], gyro[0], gyro[1], gyro[2]])
 
     def visualize_data(self):
@@ -336,8 +321,18 @@ class NavigationApp(tk.Tk):
 
     def update_orientation(self):
         if self.callback.packetAvailable():
+            s = ""
             packet = self.callback.getNextPacket()
             self.visualize_orientation(packet)
+            # if packet.containsCalibratedData():
+            if not self.running:
+                acc = packet.calibratedAcceleration()
+                s = "Acc X: %.2f" % acc[0] + ", Acc Y: %.2f" % acc[1] + ", Acc Z: %.2f" % acc[2]
+                gyr = packet.calibratedGyroscopeData()
+                s += " |Gyr X: %.2f" % gyr[0] + ", Gyr Y: %.2f" % gyr[1] + ", Gyr Z: %.2f" % gyr[2]
+            self.data_label.config(text=s)
+            self.data_text.insert(tk.END, s + '\n')
+            self.data_text.see(tk.END)  # Scroll to the end of the text box
         self.after(100, self.update_orientation)  # Update every 100 ms
 
     def configure_device(self):
