@@ -39,7 +39,9 @@ def Init_det_glrt():
     simdata['g'] = gravity(simdata['latitude'], simdata['altitude'])
 
     # Sampling period [s]
-    simdata['Ts'] = 1 / 250
+    simdata['Ts'] = 1 / 250 # alogrithm configuration
+    # Sampling rate [Hz]
+    simdata['Hz'] = 250 # sensor configuration
 
     # Initial heading [rad]
     simdata['init_heading'] = 0 * np.pi / 180
@@ -64,7 +66,7 @@ def Init_det_glrt():
     simdata['sigma_g'] = 0.1 * np.pi / 180
 
     # Window size of the zero-velocity detector [samples]
-    simdata['Window_size'] = 5
+    simdata['Window_size'] = 5 # originally at 5
 
     # Threshold used in the zero-velocity detector
     simdata['gamma'] = 0.3e5

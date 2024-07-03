@@ -1,0 +1,34 @@
+general_parameters:
+  altitude: 100
+  latitude: 58
+  Ts: 0.01 # 0.01 / 0.005
+  sample_rate: 100 # 100 / 200
+  init_heading: 0
+  init_pos: [0, 0, 0]
+  data_sets: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61]
+
+detector_settings:
+  detector_type: GLRT
+  sigma_a: 0.01
+  sigma_g: 0.0017453292519943296  # 0.1 * pi / 180
+  Window_size: 5
+  gamma: 30000
+  detector_prio: normalized velocity
+
+filter_parameters:
+  biases: off
+  scalefactors: off
+  sigma_acc: [1.3, 1.3, 1.3]
+  sigma_gyro: [0.00017453292519943296, 0.00017453292519943296, 0.00017453292519943296]
+  acc_bias_driving_noise: [0.0000001, 0.0000001, 0.0000001]
+  gyro_bias_driving_noise: [0.0000017453292519943296, 0.0000017453292519943296, 0.0000017453292519943296]
+  sigma_vel: [0.1, 0.1, 0.1]
+  sigma_initial_pos: [0.00001, 0.00001, 0.00001]
+  sigma_initial_vel: [0.00001, 0.00001, 0.00001]
+  sigma_initial_att: [0.017453292519943295, 0.017453292519943295, 0.0017453292519943296]
+  sigma_initial_acc_bias: [0.3, 0.3, 0.3]
+  sigma_initial_gyro_bias: [0.005235987755982988, 0.005235987755982988, 0.005235987755982988]
+  sigma_initial_acc_scale: [0.0001, 0.0001, 0.0001]
+  sigma_initial_gyro_scale: [0.00001, 0.00001, 0.00001]
+  acc_bias_instability_time_constant_filter: inf
+  gyro_bias_instability_time_constant_filter: inf

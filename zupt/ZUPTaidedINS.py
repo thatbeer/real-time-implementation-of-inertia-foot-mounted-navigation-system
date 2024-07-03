@@ -7,7 +7,7 @@ def ZUPTaidedINS(u, zupt, logL, adpt_flag, simdata):
 
     x_h, cov, Id = init_vec(N, P, simdata) #checked
     x_h[0:9, 0], quat = init_Nav_eq(u, simdata) # checked function not output
-    # checked, replace the first row of x_h (transposed in matlab framwork)
+    # checked, replace the first row of x_h (transposed in matlab framwork) 
     if adpt_flag:
         zupt = np.zeros((1,len(logL[0]) + 5), dtype=bool)
         delta_t = 0

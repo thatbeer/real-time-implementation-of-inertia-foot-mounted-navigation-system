@@ -47,18 +47,21 @@ class NavigationApp(tk.Tk):
         self.geometry("1200x800")
 
         self.config = config
-        self.sampling_rate = config.general_parameters.sample_rate
+        # self.sampling_rate = config.general_parameters.sample_rate
         self.scanner = Scanner()
         self.callback = XdaCallback()
         self.simdata = Init_det_glrt()
-        self.ins = INS(self.simdata, adpt_flag=True)
+        self.ins = INS(self.simdata)
         # self.simdata = Init_det_glrt()
         self.running = False
         self.device = None
         self.n = 0
 
-        self.time_window = 1.0 # sec
-        self.sampling_rate = 1 / self.simdata['Ts']
+        self.sampling_rate = self.simdata['Hz']
+        # self.time_window = 1.0 # sec
+        self.time_window = self.sampling_rate # sec
+        # self.sampling_rate = 1 / self.simdata['Ts']
+        self.Ts = self.simdata['Ts']
         self.u_window = []
         self.batch_position = np.zeros((3, 1))
         self.state_vector = np.zeros((9, 1))
@@ -154,7 +157,7 @@ class NavigationApp(tk.Tk):
             print("Resetting device orientation...")
             self.device.gotoConfig()
             print("Reset the orientation") # XRM_Inclination / XRM_Global
-            self.device.resetOrientation(xda.XRM_Inclination)  ##how to extract the enum to request command?
+            self.device.resetOrientation(xda.XRM_Global)  ##how to extract the enum to request command?
             print("go back to measurement mode...")
             self.device.gotoMeasurement()
         else:
@@ -230,7 +233,8 @@ class NavigationApp(tk.Tk):
 
     def collect_data(self): 
         while self.running:
-            window_size = int(self.time_window * self.sampling_rate)
+            # window_size = int(self.time_window * self.sampling_rate) # 
+            window_size = 250 # modified manually
             if self.callback.packetAvailable():
                 s = ""
                 packet = self.callback.getNextPacket()
@@ -256,7 +260,7 @@ class NavigationApp(tk.Tk):
                         init_quat=self.init_quat,
                         init_P=self.init_P)
                     for j in range(len(x_h[0])):
-                            xj,yj,zj = x_h[:3,j]
+                            xj,yj,zj = x_h[:3, j]
                             self.positions.append([xj, yj, zj])
                     x, y, z = x_h[0:3, -1]
                     self.batch_position[0] += x
@@ -277,10 +281,15 @@ class NavigationApp(tk.Tk):
 
     def visualize_data(self):
         if len(self.state_position) > 0:
-            pos = np.array(self.state_position)
-
+            # pos = np.array(self.state_position)
+            pos = np.array(self.positions)
+            x_pos = pos[:, 0]
+            y_pos = pos[:, 1]
+            
             self.ax_position.clear()
-            self.ax_position.plot(pos[:, 0], pos[:, 1])
+            # self.ax_position.plot(pos[:, 0], pos[:, 1])
+            self.ax_position.plot(x_pos, y_pos, marker='o', linestyle='-', color='b', zorder=1)
+
             max_range = np.max(np.abs(pos)) * 1.1 + 3
             self.ax_position.set_xlim([-max_range, max_range])
             self.ax_position.set_ylim([-max_range, max_range])
@@ -295,7 +304,7 @@ class NavigationApp(tk.Tk):
         if packet.containsOrientation():
             quaternion = packet.orientationQuaternion()
             q0, q1, q2, q3 = quaternion[0], quaternion[1], quaternion[2], quaternion[3]
-
+            
             # Convert quaternion to rotation matrix
             R_matrix = np.array([
                 [1 - 2 * (q2 ** 2 + q3 ** 2), 2 * (q1 * q2 - q3 * q0), 2 * (q1 * q3 + q2 * q0)],
