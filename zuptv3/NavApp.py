@@ -16,7 +16,8 @@ from omegaconf import OmegaConf
 
 from Init_det_glrt import Init_det_glrt
 # from INS import INS
-from RTINS import INS
+# from RTINS import INS
+from INSV2 import INS
 # from ZUPTaidedINS import ZUPTaidedINS
 # from detector import detector_adaptive
 # from xda_utils import *
@@ -65,12 +66,13 @@ class NavigationApp(tk.Tk):
         self.u_window = []
         self.batch_position = np.zeros((3, 1))
         self.state_vector = np.zeros((9, 1))
-        self.cov = None
+        # self.cov = None
         self.state_position = []
 
         self.init_P = None
         self.init_quat = None
         self.init_position = None
+        self.init_dT = 0
 
         self.positions = []
 
@@ -190,6 +192,13 @@ class NavigationApp(tk.Tk):
         self.reset_initial_position()
         self.add_text(f"Disconnected successfully...")
         self.info_label.config(text="Sensor Information: Not Connected")
+
+    def reset_initial_parameters(self):
+        self.init_dT = 0
+        self.init_quat = None
+        self.init_P = None
+        self.init_position = None
+        return self
         
     def start_collection(self):
         self.running = True
@@ -197,6 +206,7 @@ class NavigationApp(tk.Tk):
         self.stop_button.config(state=tk.NORMAL)
 
         self.state_position.clear()  # clear the previous collection
+        self.reset_initial_parameters()
 
         self.collection_thread = threading.Thread(target=self.collect_data)
         self.collection_thread.start()
@@ -234,7 +244,7 @@ class NavigationApp(tk.Tk):
     def collect_data(self): 
         while self.running:
             # window_size = int(self.time_window * self.sampling_rate) # 
-            window_size = 250 # modified manually
+            window_size = 750 # modified manually 
             if self.callback.packetAvailable():
                 s = ""
                 packet = self.callback.getNextPacket()
@@ -258,15 +268,16 @@ class NavigationApp(tk.Tk):
                         us.T, zupt, logL, True, 
                         init_state=self.init_position,
                         init_quat=self.init_quat,
-                        init_P=self.init_P)
+                        init_P=self.init_P,
+                        init_dT=self.init_dT)
                     for j in range(len(x_h[0])):
                             xj,yj,zj = x_h[:3, j]
                             self.positions.append([xj, yj, zj])
-                    x, y, z = x_h[0:3, -1]
-                    self.batch_position[0] += x
-                    self.batch_position[1] += y
-                    self.batch_position[2] += z
-                    self.state_position.append(self.batch_position.ravel().tolist())
+                    # x, y, z = x_h[0:3, -1]
+                    # self.batch_position[0] += x
+                    # self.batch_position[1] += y
+                    # self.batch_position[2] += z
+                    # self.state_position.append(self.batch_position.ravel().tolist())
                     self.init_position, self.init_quat, self.init_P = x_h[:,-1], quat, P
                     self.u_window.clear() # does not need with non-batch
                     self.visualize_data()
@@ -280,7 +291,7 @@ class NavigationApp(tk.Tk):
         return np.array([acc[0], acc[1], acc[2], gyro[0], gyro[1], gyro[2]])
 
     def visualize_data(self):
-        if len(self.state_position) > 0:
+        if len(self.positions) > 0:
             # pos = np.array(self.state_position)
             pos = np.array(self.positions)
             x_pos = pos[:, 0]

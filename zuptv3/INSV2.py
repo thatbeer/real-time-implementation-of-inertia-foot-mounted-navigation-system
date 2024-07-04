@@ -4,8 +4,9 @@ from geometrys import q2dcm, dcm2q, Rt2b
 
 ## assume 'scalefactors' and 'biases' are off
 class INS:
-    def __init__(self, simdata):
+    def __init__(self, simdata, test_mode=False):
         self.simdata = simdata
+        self.test_mode=False
 
         # changable parameter
         self.c_x_h = None
@@ -65,13 +66,15 @@ class INS:
         return x, quat
 
     
-    def baseline(self, imu, zupt, logL, adpt_flag, init_x=None, init_q=None, init_P=None):
+    def baseline(self, imu, zupt, logL, adpt_flag, init_x=None, init_q=None, init_P=None, delta_t=0, last_zupt=None):
         N = len(imu[0])
         cov = np.zeros((9, N))
         x_h = np.zeros((9, N))
-
+     
         zupt = np.zeros((1,len(logL[0]) + 5), dtype=bool)
-        delta_t = 0
+        if last_zupt is not None:
+            zupt[0][:5] = last_zupt
+        # delta_t = 0
         gamma = np.zeros(len(logL[0]))
 
         if init_x is not None:
@@ -141,7 +144,7 @@ class INS:
                 P = (P + P.T) / 2
                 cov[:, k] = np.diag(P)
 
-        if adpt_flag:
+        if self.test_mode:
             t = self.simdata['Ts'] * np.arange(N)
             gamma[gamma > -1e2] = -1e1
             plt.figure()
@@ -154,7 +157,7 @@ class INS:
             plt.ylim([-1e8, -1e2])
             plt.show()     
 
-        return x_h, cov, quat, P
+        return x_h, cov, quat, P, delta_t, zupt[0][-5:]
 
         
     def Navigation_equations(self, x, u, q): # checked

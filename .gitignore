@@ -2,3 +2,9 @@ old_frame/*
 core_old/*
 /core/*.mtb
 /core/__pycache__
+zupt/
+zuptv2/
+zuptv3/
+logfile.mtb
+data_inert.txt
+mimu/
